@@ -128,9 +128,9 @@ If the assistant creates a new script, Neil will assign its number and position 
 - **Project**: IPES2026
 - **Author**: Neil
 - **Field**: Political Science
-- **Topic**: Fill in project-specific topic
-- **Research question**: Fill in project-specific question
-- **Primary dataset**: `INSERT FILE PATH`
+- **Topic**: Pandemic wealth shocks and electoral accountability across democracies
+- **Research question**: Did the distributional incidence of pandemic wealth shocks determine which incumbents were punished, and does this generalize across democracies with different financial structures?
+- **Primary dataset**: LWS/LIS microdata (remote execution) + subnational election returns (see `Data/Raw/`)
 - **Code**: Python files and notebooks in `Code/`
 - **Paper**: LaTeX in `Paper/`
 - **Key libraries**: pandas, pyarrow, statsmodels

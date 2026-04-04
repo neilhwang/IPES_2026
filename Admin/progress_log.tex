@@ -1,0 +1,83 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{enumitem}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\title{IPES 2026 --- Progress Log\\[4pt]
+\large Who Pays, Who Punishes? Pandemic Wealth Shocks and Electoral Accountability}
+\author{Neil Hwang}
+\date{Last updated: \today}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+%% ============================================================
+\section{Project Plan}
+\label{sec:plan}
+%% ============================================================
+
+\subsection{Phase 1: Housekeeping \& Data Inventory}
+
+\begin{enumerate}
+  \item \textbf{Update \texttt{README.md} and \texttt{CLAUDE.md}} --- fill in placeholder fields with actual project details (title, author, research question, data sources).
+  \item \textbf{Audit \texttt{Data/Raw/}} --- read the LWS/LIS Excel contents files to map which country-waves are available and which are needed. Document gaps.
+  \item \textbf{Catalog election data} --- profile each election dataset (variables, geographic unit, time coverage) so we know what we have.
+\end{enumerate}
+
+\subsection{Phase 2: LWS Exploration (Proof of Concept --- US)}
+
+\begin{enumerate}[resume]
+  \item \textbf{Write \texttt{01\_lws\_exploration.py}} --- load the LWS contents/variable files, map which variables correspond to housing, equities, deposits, debt, income quintile. Documentation and planning script.
+  \item \textbf{Draft LWS query code for US waves} (us19, us22) --- write the Python code to submit to the LIS remote-execution system. Decompose net worth changes by asset class and income quintile.
+  \item \textbf{Construct the ``base exposure index''} for the US as proof of concept.
+\end{enumerate}
+
+\subsection{Phase 3: Election Data Assembly}
+
+\begin{enumerate}[resume]
+  \item \textbf{Write \texttt{02\_election\_data.py}} --- clean and standardize available election datasets (US, UK, South Korea, Canada) into a common format: geographic unit, incumbent vote share (pre/post), vote swing.
+  \item \textbf{Identify sources for missing countries} --- Japan 2021, Australia 2022, France 2022, Denmark 2022, Norway 2021, Spain 2023.
+\end{enumerate}
+
+\subsection{Phase 4: Adapt Causal Inference Tools}
+
+\begin{enumerate}[resume]
+  \item \textbf{Adapt the inherited Python scripts} --- the parent project's shift-share IV (\texttt{20\_shift\_share\_iv.py}), entropy balancing (\texttt{24\_entropy\_balancing.py}), and Cinelli--Hazlett sensitivity (\texttt{22\_cinelli\_hazlett\_sensitivity.py}) scripts live in \texttt{Data/Raw/}. Refactor them into the \texttt{Code/} pipeline for the cross-national setting.
+\end{enumerate}
+
+%% ============================================================
+\section{Session Log}
+\label{sec:sessions}
+%% ============================================================
+
+\subsection{2026-04-04 --- Session 1: Project Setup}
+
+\textbf{Accomplished:}
+\begin{itemize}
+  \item Created project directory structure and pushed initial commit to GitHub.
+  \item Added \texttt{.gitignore} files in \texttt{Data/} and \texttt{Literature/} to prevent large/sensitive files from being tracked.
+  \item Made \texttt{ipes\_abstract\_wealth\_shocks.tex} compile-ready (added document class, preamble, and document environment).
+  \item Neil updated \texttt{CLAUDE.md}: switched language from R to Python, renamed session conventions, filled in project name and author.
+  \item Drafted four-phase project plan (this document).
+\end{itemize}
+
+\textbf{Key decisions:}
+\begin{itemize}
+  \item Project code will be in \textbf{Python} (not R). Key libraries: \texttt{pandas}, \texttt{pyarrow}, \texttt{statsmodels}.
+  \item Parent project's Python scripts for IV, entropy balancing, and sensitivity analysis can be reused directly rather than ported.
+\end{itemize}
+
+\textbf{Pending / next:}
+\begin{itemize}
+  \item Phase 1 --- update \texttt{README.md} placeholders, audit LWS/LIS contents files, catalog election data.
+\end{itemize}
+
+%% ============================================================
+%% Future sessions go below
+%% ============================================================
+
+\end{document}
