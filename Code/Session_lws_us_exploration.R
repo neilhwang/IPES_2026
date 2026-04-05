@@ -7,6 +7,13 @@
 # Submit this script to LISSY at:
 #   https://www.lisdatacenter.org/data-access/lissy/
 #
+# LISSY notes:
+#   - read.LIS() works for both LIS and LWS datasets
+#   - LWS data has implicates (inum variable) — average across implicates
+#   - dplyr is available (dependency of lissyrtools)
+#   - Hmisc is NOT confirmed — use manual weighted quantile
+#   - Output is plain ASCII only (printed to job log)
+#
 # Variable mapping:
 #   hanr   = real estate (housing)
 #   hafis  = stocks and equity
@@ -20,39 +27,45 @@
 #   dhi    = disposable household income
 #   nhhmem = household size
 #   hpopwgt = household population weight
+#   inum   = implicate number (LWS multiply-imputed data)
 # =============================================================================
 
 library(dplyr)
 library(tidyr)
 
 # -----------------------------------------------------------------------------
+# Helper: weighted quantile (no Hmisc dependency)
+# -----------------------------------------------------------------------------
+weighted_quantile <- function(x, w, probs) {
+  idx <- !is.na(x) & !is.na(w) & w > 0
+  x <- x[idx]
+  w <- w[idx]
+  ord <- order(x)
+  x <- x[ord]
+  w <- w[ord]
+  cum_w <- cumsum(w) / sum(w)
+  sapply(probs, function(p) {
+    if (p <= 0) return(min(x))
+    if (p >= 1) return(max(x))
+    i <- which(cum_w >= p)[1]
+    x[i]
+  })
+}
+
+# Weighted mean function
+wmean <- function(x, w) {
+  idx <- !is.na(x) & !is.na(w)
+  if (sum(idx) == 0) return(NA_real_)
+  sum(x[idx] * w[idx]) / sum(w[idx])
+}
+
+# -----------------------------------------------------------------------------
 # 1. Load US LWS household data — pre and post pandemic
+#    read.LIS() works for both LIS and LWS; dataset alias determines source
 # -----------------------------------------------------------------------------
 
-# LISSY read function (adjust syntax if needed based on LISSY version)
-us19 <- read.LWS("us19", "wh", vars = c(
-  "hid", "dname", "hpopwgt", "nhhmem", "dhi",
-  "hanr", "hanrp", "hanro",
-  "hafis", "hafiss", "hafiso",
-  "hafc", "hafct", "hafcs",
-  "hafi", "hafib", "hafii",
-  "hannb",
-  "hl", "hlrp", "hlro", "hlr", "hln",
-  "dnw",
-  "ha", "han", "haf"
-))
-
-us22 <- read.LWS("us22", "wh", vars = c(
-  "hid", "dname", "hpopwgt", "nhhmem", "dhi",
-  "hanr", "hanrp", "hanro",
-  "hafis", "hafiss", "hafiso",
-  "hafc", "hafct", "hafcs",
-  "hafi", "hafib", "hafii",
-  "hannb",
-  "hl", "hlrp", "hlro", "hlr", "hln",
-  "dnw",
-  "ha", "han", "haf"
-))
+us19 <- read.LIS("us19wh")
+us22 <- read.LIS("us22wh")
 
 # Tag waves
 us19$wave <- "pre"
@@ -61,8 +74,54 @@ us22$wave <- "post"
 # Combine
 df <- bind_rows(us19, us22)
 
+# Check what variables are available
+cat("================================================================\n")
+cat("AVAILABLE VARIABLES IN DATASET\n")
+cat("================================================================\n\n")
+cat("Columns:", paste(names(df), collapse = ", "), "\n\n")
+
 # -----------------------------------------------------------------------------
-# 2. Construct equivalized income quintiles (within each wave)
+# 2. Handle implicates
+#    LWS data is multiply imputed. The inum variable identifies implicates.
+#    Strategy: compute statistics within each implicate, then average across.
+#    For this exploratory script, we first average wealth values across
+#    implicates at the household level, then proceed with analysis.
+# -----------------------------------------------------------------------------
+
+# Check if inum exists and how many implicates
+if ("inum" %in% names(df)) {
+  cat("Implicates found. Values of inum:\n")
+  print(table(df$wave, df$inum))
+  cat("\n")
+
+  # Variables to average across implicates
+  wealth_vars <- c("hanr", "hanrp", "hanro", "hafis", "hafiss", "hafiso",
+                   "hafc", "hafct", "hafcs", "hafi", "hafib", "hafii",
+                   "hannb", "hl", "hlrp", "hlro", "hlr", "hln",
+                   "dnw", "ha", "han", "haf")
+
+  # Keep only variables that exist in the data
+  wealth_vars <- wealth_vars[wealth_vars %in% names(df)]
+
+  # Non-wealth variables to keep (take first value per household)
+  id_vars <- c("hid", "dname", "hpopwgt", "nhhmem", "dhi", "wave")
+  id_vars <- id_vars[id_vars %in% names(df)]
+
+  # Average wealth across implicates within each household
+  df <- df %>%
+    group_by(across(all_of(id_vars))) %>%
+    summarise(
+      across(all_of(wealth_vars), ~ mean(.x, na.rm = TRUE)),
+      .groups = "drop"
+    )
+
+  cat("After averaging implicates:", nrow(df), "household-wave observations\n\n")
+} else {
+  cat("No inum variable found — single implicate or non-imputed data.\n\n")
+}
+
+# -----------------------------------------------------------------------------
+# 3. Construct equivalized income quintiles (within each wave)
 # -----------------------------------------------------------------------------
 
 # Equivalized income: dhi / sqrt(household size)
@@ -75,12 +134,14 @@ df <- df %>%
 assign_quintiles <- function(data) {
   data <- data %>% filter(!is.na(eq_income) & !is.na(hpopwgt))
 
-  # Weighted quintile breaks
-  breaks <- Hmisc::wtd.quantile(
+  breaks <- weighted_quantile(
     data$eq_income,
-    weights = data$hpopwgt,
+    data$hpopwgt,
     probs = c(0, 0.2, 0.4, 0.6, 0.8, 1)
   )
+  # Ensure breaks are unique (nudge duplicates)
+  breaks[1] <- breaks[1] - 1
+  breaks[length(breaks)] <- breaks[length(breaks)] + 1
 
   data$quintile <- cut(
     data$eq_income,
@@ -98,35 +159,17 @@ df <- df %>%
   ungroup()
 
 # -----------------------------------------------------------------------------
-# 3. Compute weighted means of asset components by quintile and wave
+# 4. Compute weighted means of asset components by quintile and wave
 # -----------------------------------------------------------------------------
 
 # Key asset/liability components for decomposition
-asset_vars <- c(
-  "hanr",   # real estate (total)
-  "hanrp",  # principal residence
-  "hanro",  # other real estate
-  "hafis",  # stocks and equity
-  "hafc",   # deposits and cash
-  "hafi",   # financial investments (broader)
-  "hannb",  # business equity
-  "hlr",    # mortgage (real estate liabilities)
-  "hln",    # non-housing liabilities
-  "hl",     # total liabilities
-  "dnw",    # disposable net worth
-  "ha",     # total assets
-  "han",    # non-financial assets
-  "haf"     # financial assets
-)
+asset_vars <- c("hanr", "hanrp", "hanro", "hafis", "hafc", "hafi",
+                "hannb", "hlr", "hln", "hl", "dnw", "ha", "han", "haf")
 
-# Weighted mean function
-wmean <- function(x, w) {
-  idx <- !is.na(x) & !is.na(w)
-  if (sum(idx) == 0) return(NA_real_)
-  sum(x[idx] * w[idx]) / sum(w[idx])
-}
+# Keep only variables that exist
+asset_vars <- asset_vars[asset_vars %in% names(df)]
 
-# Compute means by wave x quintile
+# Means by wave x quintile
 summary_qw <- df %>%
   group_by(wave, quintile) %>%
   summarise(
@@ -139,7 +182,7 @@ summary_qw <- df %>%
     .groups = "drop"
   )
 
-# Also compute overall means by wave (all quintiles pooled)
+# Overall means by wave (all quintiles pooled)
 summary_w <- df %>%
   group_by(wave) %>%
   summarise(
@@ -157,7 +200,7 @@ summary_all <- bind_rows(summary_qw, summary_w) %>%
   arrange(wave, quintile)
 
 # -----------------------------------------------------------------------------
-# 4. Print summary: levels by wave and quintile
+# 5. Print summary: levels by wave and quintile
 # -----------------------------------------------------------------------------
 
 cat("\n")
@@ -168,7 +211,7 @@ cat("================================================================\n\n")
 print(as.data.frame(summary_all), row.names = FALSE)
 
 # -----------------------------------------------------------------------------
-# 5. Compute changes (post - pre) by quintile
+# 6. Compute changes (post - pre) by quintile
 # -----------------------------------------------------------------------------
 
 changes <- summary_all %>%
@@ -182,17 +225,20 @@ changes <- summary_all %>%
     chg_hanr   = mean_hanr_post   - mean_hanr_pre,
     chg_hafis  = mean_hafis_post  - mean_hafis_pre,
     chg_hafc   = mean_hafc_post   - mean_hafc_pre,
-    chg_hafi   = mean_hafi_post   - mean_hafi_pre,
     chg_hannb  = mean_hannb_post  - mean_hannb_pre,
     chg_hlr    = mean_hlr_post    - mean_hlr_pre,
     chg_hln    = mean_hln_post    - mean_hln_pre,
     chg_dnw    = mean_dnw_post    - mean_dnw_pre,
     chg_ha     = mean_ha_post     - mean_ha_pre,
-    # Percentage changes
-    pct_chg_hanr  = chg_hanr  / abs(mean_hanr_pre)  * 100,
-    pct_chg_hafis = chg_hafis / abs(mean_hafis_pre) * 100,
-    pct_chg_hafc  = chg_hafc  / abs(mean_hafc_pre)  * 100,
-    pct_chg_dnw   = chg_dnw   / abs(mean_dnw_pre)   * 100
+    # Percentage changes (guard against division by zero)
+    pct_chg_hanr  = ifelse(abs(mean_hanr_pre) > 0,
+                           chg_hanr / abs(mean_hanr_pre) * 100, NA),
+    pct_chg_hafis = ifelse(abs(mean_hafis_pre) > 0,
+                           chg_hafis / abs(mean_hafis_pre) * 100, NA),
+    pct_chg_hafc  = ifelse(abs(mean_hafc_pre) > 0,
+                           chg_hafc / abs(mean_hafc_pre) * 100, NA),
+    pct_chg_dnw   = ifelse(abs(mean_dnw_pre) > 0,
+                           chg_dnw / abs(mean_dnw_pre) * 100, NA)
   )
 
 cat("\n")
@@ -215,16 +261,17 @@ pct_print <- changes %>%
 print(as.data.frame(pct_print), row.names = FALSE)
 
 # -----------------------------------------------------------------------------
-# 6. Asset composition shares (portfolio structure) by quintile
+# 7. Asset composition shares (portfolio structure) by quintile
 # -----------------------------------------------------------------------------
 
 shares <- summary_all %>%
   mutate(
-    shr_housing  = mean_hanr  / mean_ha * 100,
-    shr_equity   = mean_hafis / mean_ha * 100,
-    shr_deposits = mean_hafc  / mean_ha * 100,
-    shr_business = mean_hannb / mean_ha * 100,
-    shr_other_fin = (mean_haf - mean_hafc - mean_hafis) / mean_ha * 100
+    shr_housing  = ifelse(mean_ha > 0, mean_hanr  / mean_ha * 100, NA),
+    shr_equity   = ifelse(mean_ha > 0, mean_hafis / mean_ha * 100, NA),
+    shr_deposits = ifelse(mean_ha > 0, mean_hafc  / mean_ha * 100, NA),
+    shr_business = ifelse(mean_ha > 0, mean_hannb / mean_ha * 100, NA),
+    shr_other_fin = ifelse(mean_ha > 0,
+      (mean_haf - mean_hafc - mean_hafis) / mean_ha * 100, NA)
   ) %>%
   select(wave, quintile, shr_housing, shr_equity, shr_deposits,
          shr_business, shr_other_fin)
@@ -237,16 +284,13 @@ cat("================================================================\n\n")
 print(as.data.frame(shares), row.names = FALSE)
 
 # -----------------------------------------------------------------------------
-# 7. Shift-share exposure calculation
+# 8. Shift-share exposure calculation
 #    Exposure = sum_k (pre_share_k * global_shock_k)
 #    where k = asset class, pre_share = portfolio weight, shock = % change
 # -----------------------------------------------------------------------------
 
-# Compute quintile-level portfolio shares (pre-pandemic only) and
-# asset-class-level shocks (overall % change pre to post)
-
 pre_shares <- summary_all %>%
-  filter(wave == "pre") %>%
+  filter(wave == "pre" & mean_ha > 0) %>%
   mutate(
     w_housing  = mean_hanr  / mean_ha,
     w_equity   = mean_hafis / mean_ha,
@@ -262,7 +306,8 @@ overall_shocks <- changes %>%
     shock_housing  = pct_chg_hanr / 100,
     shock_equity   = pct_chg_hafis / 100,
     shock_deposits = pct_chg_hafc / 100,
-    shock_business = chg_hannb / abs(mean_hannb_pre) # compute manually
+    shock_business = ifelse(!is.na(mean_hannb_pre) & abs(mean_hannb_pre) > 0,
+                            chg_hannb / abs(mean_hannb_pre), NA)
   )
 
 # Shift-share exposure by quintile
@@ -284,7 +329,7 @@ cat("================================================================\n\n")
 print(as.data.frame(exposure), row.names = FALSE)
 
 # -----------------------------------------------------------------------------
-# 8. Observation counts and data quality checks
+# 9. Observation counts and data quality checks
 # -----------------------------------------------------------------------------
 
 cat("\n")
@@ -292,25 +337,37 @@ cat("================================================================\n")
 cat("DATA QUALITY CHECKS\n")
 cat("================================================================\n\n")
 
-# Observation counts
 cat("Observations per wave:\n")
-df %>% count(wave) %>% print(row.names = FALSE)
+df %>% count(wave) %>% as.data.frame() %>% print(row.names = FALSE)
 
 cat("\nObservations per wave x quintile:\n")
-df %>% count(wave, quintile) %>% print(row.names = FALSE)
+df %>% count(wave, quintile) %>% as.data.frame() %>% print(row.names = FALSE)
 
 # Missing rates for key variables
+miss_vars <- c("dhi", "dnw", "hanr", "hafis", "hafc", "hannb", "hl")
+miss_vars <- miss_vars[miss_vars %in% names(df)]
+
 cat("\nMissing rates (% of observations):\n")
 miss_rates <- df %>%
   group_by(wave) %>%
   summarise(
     across(
-      all_of(c("dhi", "dnw", "hanr", "hafis", "hafc", "hannb", "hl")),
+      all_of(miss_vars),
       ~ mean(is.na(.x)) * 100,
       .names = "pct_miss_{.col}"
     ),
     .groups = "drop"
   )
 print(as.data.frame(miss_rates), row.names = FALSE)
+
+# Median net worth by quintile (useful sanity check)
+cat("\nMedian net worth (dnw) by wave x quintile:\n")
+if ("dnw" %in% names(df)) {
+  df %>%
+    group_by(wave, quintile) %>%
+    summarise(median_dnw = median(dnw, na.rm = TRUE), .groups = "drop") %>%
+    as.data.frame() %>%
+    print(row.names = FALSE)
+}
 
 cat("\n\n=== END OF LISSY OUTPUT ===\n")
